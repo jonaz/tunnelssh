@@ -19,8 +19,8 @@ type Agent struct {
 	Master string
 	ID     string
 	Token  string
+	Target string
 	wg     *sync.WaitGroup
-	mutex  sync.RWMutex
 }
 
 func NewAgentFromContext(c *cli.Context) *Agent {
@@ -28,24 +28,36 @@ func NewAgentFromContext(c *cli.Context) *Agent {
 		Master: c.String("master"),
 		ID:     c.String("id"),
 		Token:  c.String("token"),
+		Target: c.String("target"),
 		wg:     &sync.WaitGroup{},
 	}
 	return m
 }
 
 func (a *Agent) Run(pCtx context.Context) error {
-	//TODO retry loop
+	for {
+		err := a.run(pCtx)
+		if err != nil {
+			logrus.Error(err)
+		}
+		if pCtx.Err() != nil {
+			return pCtx.Err()
+		}
+		time.Sleep(time.Second * 5)
+	}
+}
+func (a *Agent) run(pCtx context.Context) error {
 	ctx, cancel := context.WithTimeout(pCtx, time.Second*10)
 	defer cancel()
 
-	//TODO send token in header
 	u := fmt.Sprintf("%s/agent/websocket-v1?id=%s", a.Master, a.ID)
+	logrus.Debugf("connecting to websocket: %s", u)
 	wsClient, _, err := websocket.Dial(ctx, u, nil)
 	if err != nil {
 		return err
 	}
 
-	c := websocket.NetConn(context.TODO(), wsClient, websocket.MessageBinary)
+	c := websocket.NetConn(context.Background(), wsClient, websocket.MessageBinary)
 	defer c.Close()
 
 	sess, err := yamux.Client(c, nil)
@@ -56,7 +68,6 @@ func (a *Agent) Run(pCtx context.Context) error {
 
 	acceptCh := make(chan net.Conn)
 	go func() {
-		/* TODO */
 		for {
 			conn, err := sess.Accept()
 			if err != nil {
@@ -80,8 +91,9 @@ func (a *Agent) Run(pCtx context.Context) error {
 			ctx1, cancel1 := context.WithTimeout(pCtx, time.Second*10)
 			defer cancel1()
 			var d net.Dialer
-			remote, err := d.DialContext(ctx1, "tcp", "127.0.0.1:22")
+			remote, err := d.DialContext(ctx1, "tcp", a.Target)
 			if err != nil {
+				conn.Close()
 				return err
 			}
 
@@ -101,6 +113,8 @@ func (a *Agent) Run(pCtx context.Context) error {
 			}
 			go cp(conn, remote)
 			cp(remote, conn)
+			conn.Close()
+			remote.Close()
 		}
 	}
 }

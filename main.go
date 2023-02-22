@@ -16,7 +16,6 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
-// Version is application version.
 var (
 	// TODO set on build
 	Version     = "dev"
@@ -51,28 +50,6 @@ func app() *cli.App {
 
 	app.Commands = []*cli.Command{
 		{
-			Name:  "proxy",
-			Usage: "connect to a agent through the master",
-			Action: func(c *cli.Context) error {
-				proxy := proxy.NewProxyFromContext(c)
-				return proxy.Run(c.Context)
-			},
-			Flags: []cli.Flag{
-				&cli.StringFlag{
-					Name:  "master",
-					Usage: "which master to connect to. Will connect to masters and get all of them and persist to config if set.",
-				},
-				&cli.StringFlag{
-					Name:  "token",
-					Usage: "secret to connect to the master",
-				},
-				&cli.StringFlag{
-					Name:  "id",
-					Usage: "agent id to connect to",
-				},
-			},
-		},
-		{
 			Name:  "agent",
 			Usage: "starts the agent and connect to the master websocket",
 			Action: func(c *cli.Context) error {
@@ -82,7 +59,30 @@ func app() *cli.App {
 			Flags: []cli.Flag{
 				&cli.StringFlag{
 					Name:  "master",
-					Usage: "which master to connect to. Will connect to masters and get all of them and persist to config if set.",
+					Usage: "which master to connect to.",
+				},
+				&cli.StringFlag{
+					Name:  "id",
+					Usage: "agent id to present",
+				},
+				&cli.StringFlag{
+					Name:  "target",
+					Value: "127.0.0.1:22",
+					Usage: "ip:port to tunnel to",
+				},
+			},
+		},
+		{
+			Name:  "proxy",
+			Usage: "connect to a agent through the master",
+			Action: func(c *cli.Context) error {
+				proxy := proxy.NewProxyFromContext(c)
+				return proxy.Run(c.Context)
+			},
+			Flags: []cli.Flag{
+				&cli.StringFlag{
+					Name:  "master",
+					Usage: "which master to connect to.",
 				},
 				&cli.StringFlag{
 					Name:  "token",
@@ -90,7 +90,7 @@ func app() *cli.App {
 				},
 				&cli.StringFlag{
 					Name:  "id",
-					Usage: "agent id to present",
+					Usage: "agent id to connect to",
 				},
 			},
 		},

@@ -19,7 +19,6 @@ type Proxy struct {
 	ID     string
 	Token  string
 	wg     *sync.WaitGroup
-	mutex  sync.RWMutex
 }
 
 func NewProxyFromContext(c *cli.Context) *Proxy {
@@ -36,14 +35,15 @@ func (p *Proxy) Run(pCtx context.Context) error {
 	ctx, cancel := context.WithTimeout(pCtx, time.Minute)
 	defer cancel()
 
-	//TODO send token in header
 	u := fmt.Sprintf("%s/connect/websocket-v1?id=%s", p.Master, p.ID)
-	wsClient, _, err := websocket.Dial(ctx, u, nil)
+	wsClient, _, err := websocket.Dial(ctx, u, &websocket.DialOptions{
+		HTTPHeader: map[string][]string{"Authorization": {p.Token}},
+	})
 	if err != nil {
 		return err
 	}
 
-	c := websocket.NetConn(context.TODO(), wsClient, websocket.MessageBinary)
+	c := websocket.NetConn(context.Background(), wsClient, websocket.MessageBinary)
 	defer c.Close()
 
 	sess, err := yamux.Client(c, nil)
@@ -56,12 +56,10 @@ func (p *Proxy) Run(pCtx context.Context) error {
 	if err != nil {
 		return err
 	}
+	defer conn.Close()
 
 	close := sync.Once{}
 	cp := func(dst io.WriteCloser, src io.ReadCloser) {
-		// b := buffers.Get()
-		// defer buffers.Put(b)
-		// io.CopyBuffer(dst, src, b)
 		_, err := io.Copy(dst, src)
 		if err != nil {
 			logrus.Errorf("io.Copy error: %s", err)
