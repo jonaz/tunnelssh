@@ -20,8 +20,7 @@ type Master struct {
 	Port string
 	jwt  *jwt.JWTHandler
 
-	wg    *sync.WaitGroup
-	mutex sync.RWMutex
+	wg *sync.WaitGroup
 }
 
 func NewMasterFromContext(c *cli.Context) *Master {
@@ -33,21 +32,26 @@ func NewMasterFromContext(c *cli.Context) *Master {
 	return m
 }
 
+type agentSession struct {
+	yamux *yamux.Session
+	IP    string
+}
+
 type agentSessions struct {
 	mutex    sync.RWMutex
-	sessions map[string]*yamux.Session
+	sessions map[string]*agentSession
 }
 
 func NewAgentSessions() *agentSessions {
 	return &agentSessions{
-		sessions: make(map[string]*yamux.Session),
+		sessions: make(map[string]*agentSession),
 	}
 
 }
 
-func (s *agentSessions) Set(id string, sess *yamux.Session) {
+func (s *agentSessions) Set(id string, sess *yamux.Session, ip string) {
 	s.mutex.Lock()
-	s.sessions[id] = sess
+	s.sessions[id] = &agentSession{yamux: sess, IP: ip}
 	s.mutex.Unlock()
 }
 func (s *agentSessions) Delete(id string) {
@@ -55,10 +59,19 @@ func (s *agentSessions) Delete(id string) {
 	delete(s.sessions, id)
 	s.mutex.Unlock()
 }
-func (s *agentSessions) Get(id string) *yamux.Session {
+func (s *agentSessions) Get(id string) *agentSession {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 	return s.sessions[id]
+}
+func (s *agentSessions) List() map[string]string {
+	ret := make(map[string]string)
+	s.mutex.RLock()
+	for id, sess := range s.sessions {
+		ret[id] = sess.IP
+	}
+	s.mutex.RUnlock()
+	return ret
 }
 
 func (a *Master) Run(pCtx context.Context) error {
@@ -100,7 +113,7 @@ func (a *Master) Run(pCtx context.Context) error {
 			logrus.Error("found no agent connection")
 			return
 		}
-		agentConn, err := agentSession.Open()
+		agentConn, err := agentSession.yamux.Open()
 		if err != nil {
 			logrus.Error("error agentSession open:", err)
 			return
@@ -147,12 +160,15 @@ func (a *Master) Run(pCtx context.Context) error {
 
 		logrus.Debugf("accepted session from %s", id)
 
-		sessions.Set(id, session)
+		// TODO RemoteAddr OR x-forwarded-for?
+		sessions.Set(id, session, r.RemoteAddr)
 		defer sessions.Delete(id)
 		<-session.CloseChan()
 	})
 
-	http.HandleFunc("/token", a.createAdminToken)
+	http.HandleFunc("/sessions-v1", a.listSessions(sessions))
+
+	http.HandleFunc("/token-v1", a.createAdminToken)
 
 	server := &http.Server{Addr: ":" + a.Port}
 	go func() {
@@ -166,6 +182,21 @@ func (a *Master) Run(pCtx context.Context) error {
 	ctxShutDown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return server.Shutdown(ctxShutDown)
+}
+
+func (a *Master) listSessions(sessions *agentSessions) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		_, err := a.jwt.Validate(r)
+		if err != nil {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		err = json.NewEncoder(w).Encode(sessions.List())
+		if err != nil {
+			logrus.Error(err)
+			return
+		}
+	}
 }
 
 func (a *Master) createAdminToken(w http.ResponseWriter, r *http.Request) {
