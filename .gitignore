@@ -13,3 +13,5 @@
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+tunnelssh-linux-amd64
+tunnelssh-linux-arm
