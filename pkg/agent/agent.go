@@ -87,34 +87,35 @@ func (a *Agent) run(pCtx context.Context) error {
 			if !ok {
 				return nil
 			}
-
-			ctx1, cancel1 := context.WithTimeout(pCtx, time.Second*10)
-			defer cancel1()
-			var d net.Dialer
-			remote, err := d.DialContext(ctx1, "tcp", a.Target)
-			if err != nil {
-				conn.Close()
-				return err
-			}
-
-			close := sync.Once{}
-			cp := func(dst io.WriteCloser, src io.ReadCloser) {
-				// b := buffers.Get()
-				// defer buffers.Put(b)
-				// io.CopyBuffer(dst, src, b)
-				_, err := io.Copy(dst, src)
-				if err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
-					logrus.Errorf("io.Copy error: %s", err)
+			go func() {
+				defer conn.Close()
+				ctx1, cancel1 := context.WithTimeout(pCtx, time.Second*10)
+				defer cancel1()
+				var d net.Dialer
+				remote, err := d.DialContext(ctx1, "tcp", a.Target)
+				if err != nil {
+					logrus.Errorf("error dialing %s: %s", a.Target, err)
+					return
 				}
-				close.Do(func() {
-					dst.Close()
-					src.Close()
-				})
-			}
-			go cp(conn, remote)
-			cp(remote, conn)
-			conn.Close()
-			remote.Close()
+				defer remote.Close()
+
+				close := sync.Once{}
+				cp := func(dst io.WriteCloser, src io.ReadCloser) {
+					// b := buffers.Get()
+					// defer buffers.Put(b)
+					// io.CopyBuffer(dst, src, b)
+					_, err := io.Copy(dst, src)
+					if err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
+						logrus.Errorf("io.Copy error: %s", err)
+					}
+					close.Do(func() {
+						dst.Close()
+						src.Close()
+					})
+				}
+				go cp(conn, remote)
+				cp(remote, conn)
+			}()
 		}
 	}
 }

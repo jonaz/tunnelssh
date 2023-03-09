@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -160,8 +161,16 @@ func (a *Master) Run(pCtx context.Context) error {
 
 		logrus.Debugf("accepted session from %s", id)
 
-		// TODO RemoteAddr OR x-forwarded-for?
-		sessions.Set(id, session, r.RemoteAddr)
+		ipAddress := r.RemoteAddr
+		fwdAddress := r.Header.Get("x-forwarded-for")
+
+		if fwdAddress != "" {
+			ips := strings.Split(fwdAddress, ",")
+			if len(ips) > 0 {
+				ipAddress = ips[0]
+			}
+		}
+		sessions.Set(id, session, ipAddress)
 		defer sessions.Delete(id)
 		<-session.CloseChan()
 	})
@@ -213,7 +222,9 @@ func (a *Master) createAdminToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ip := net.ParseIP(ipStr)
-	if !ip.IsLoopback() {
+
+	isProxy := r.Header.Get("x-forwarded-for") != ""
+	if !ip.IsLoopback() || isProxy {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
