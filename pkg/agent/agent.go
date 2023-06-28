@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -37,7 +38,7 @@ func NewAgentFromContext(c *cli.Context) *Agent {
 		if err != nil {
 			logrus.Fatalf("error reading id-file: %s", err)
 		}
-		m.ID = string(id)
+		m.ID = string(bytes.TrimSpace(id))
 	}
 	return m
 }
