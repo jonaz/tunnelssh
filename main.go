@@ -66,6 +66,10 @@ func app() *cli.App {
 					Usage: "agent id to present",
 				},
 				&cli.StringFlag{
+					Name:  "id-file",
+					Usage: "agent id from file",
+				},
+				&cli.StringFlag{
 					Name:  "target",
 					Value: "127.0.0.1:22",
 					Usage: "ip:port to tunnel to",
@@ -125,7 +129,7 @@ func app() *cli.App {
 				{
 					Name:   "zsh",
 					Usage:  "put in .zshrc: 'source <(" + os.Args[0] + " completion zsh)'",
-					Action: bashCompletion,
+					Action: zshCompletion,
 				},
 			},
 		},
@@ -146,7 +150,7 @@ func globalBefore(c *cli.Context) error {
 	return nil
 }
 
-func bashCompletion(c *cli.Context) error {
+func bashCompletion(_ *cli.Context) error {
 	binaryName := os.Args[0]
 	script := fmt.Sprintf(`#!/bin/bash
 _cli_bash_autocomplete() {
@@ -165,12 +169,12 @@ _cli_bash_autocomplete() {
 }
 complete -o bashdefault -o default -o nospace -F _cli_bash_autocomplete %s
 `, binaryName)
-	fmt.Printf(script)
+	fmt.Print(script)
 	// fmt.Println(os.Args)
 	return nil
 }
 
-func zshCompletion(c *cli.Context) error {
+func zshCompletion(_ *cli.Context) error {
 	binaryName := os.Args[0]
 	script := fmt.Sprintf(`#!/bin/zsh
 _cli_zsh_autocomplete() {
@@ -190,7 +194,7 @@ _cli_zsh_autocomplete() {
 }
 compdef _cli_zsh_autocomplete %s
 `, binaryName)
-	fmt.Printf(script)
+	fmt.Print(script)
 	// fmt.Println(os.Args)
 	return nil
 }

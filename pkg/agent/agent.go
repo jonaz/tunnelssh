@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -18,7 +20,6 @@ import (
 type Agent struct {
 	Master string
 	ID     string
-	Token  string
 	Target string
 	wg     *sync.WaitGroup
 }
@@ -27,9 +28,16 @@ func NewAgentFromContext(c *cli.Context) *Agent {
 	m := &Agent{
 		Master: c.String("master"),
 		ID:     c.String("id"),
-		Token:  c.String("token"),
 		Target: c.String("target"),
 		wg:     &sync.WaitGroup{},
+	}
+
+	if m.ID == "" && c.String("id-file") != "" {
+		id, err := os.ReadFile(c.String("id-file"))
+		if err != nil {
+			logrus.Fatalf("error reading id-file: %s", err)
+		}
+		m.ID = string(id)
 	}
 	return m
 }
@@ -46,13 +54,18 @@ func (a *Agent) Run(pCtx context.Context) error {
 		time.Sleep(time.Second * 5)
 	}
 }
+
 func (a *Agent) run(pCtx context.Context) error {
 	ctx, cancel := context.WithTimeout(pCtx, time.Second*10)
 	defer cancel()
 
 	u := fmt.Sprintf("%s/agent/websocket-v1?id=%s", a.Master, a.ID)
 	logrus.Debugf("connecting to websocket: %s", u)
-	wsClient, _, err := websocket.Dial(ctx, u, nil)
+	wsClient, _, err := websocket.Dial(ctx, u, &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"X-IPS": {strings.Join(getLocalIps(), ",")},
+		},
+	})
 	if err != nil {
 		return err
 	}
@@ -118,4 +131,19 @@ func (a *Agent) run(pCtx context.Context) error {
 			}()
 		}
 	}
+}
+func getLocalIps() []string {
+	addrs, _ := net.InterfaceAddrs()
+	ips := []string{}
+	for _, addr := range addrs {
+		ips = append(ips, addr.String())
+		// ip, ok := addr.(*net.IPNet)
+		// if !ok {
+		// 	continue
+		// }
+		// if ip.IP.To4() != nil {
+		// 	fmt.Println("IPv4: ", addr)
+		// }
+	}
+	return ips
 }

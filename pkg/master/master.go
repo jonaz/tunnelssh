@@ -34,8 +34,9 @@ func NewMasterFromContext(c *cli.Context) *Master {
 }
 
 type agentSession struct {
-	yamux *yamux.Session
-	IP    string
+	yamux      *yamux.Session
+	ExternalIP string
+	InteralIPs []string
 }
 
 type agentSessions struct {
@@ -50,9 +51,13 @@ func NewAgentSessions() *agentSessions {
 
 }
 
-func (s *agentSessions) Set(id string, sess *yamux.Session, ip string) {
+func (s *agentSessions) Set(id string, sess *yamux.Session, ip string, internalIPs []string) {
 	s.mutex.Lock()
-	s.sessions[id] = &agentSession{yamux: sess, IP: ip}
+	s.sessions[id] = &agentSession{
+		yamux:      sess,
+		ExternalIP: ip,
+		InteralIPs: internalIPs,
+	}
 	s.mutex.Unlock()
 }
 func (s *agentSessions) Delete(id string) {
@@ -65,11 +70,11 @@ func (s *agentSessions) Get(id string) *agentSession {
 	defer s.mutex.RUnlock()
 	return s.sessions[id]
 }
-func (s *agentSessions) List() map[string]string {
-	ret := make(map[string]string)
+func (s *agentSessions) List() map[string]agentSession {
+	ret := make(map[string]agentSession)
 	s.mutex.RLock()
 	for id, sess := range s.sessions {
-		ret[id] = sess.IP
+		ret[id] = *sess
 	}
 	s.mutex.RUnlock()
 	return ret
@@ -170,7 +175,7 @@ func (a *Master) Run(pCtx context.Context) error {
 				ipAddress = ips[0]
 			}
 		}
-		sessions.Set(id, session, ipAddress)
+		sessions.Set(id, session, ipAddress, strings.Split(r.Header.Get("x-ips"), ","))
 		defer sessions.Delete(id)
 		<-session.CloseChan()
 	})
