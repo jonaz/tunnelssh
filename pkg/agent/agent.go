@@ -38,7 +38,7 @@ func NewAgentFromContext(c *cli.Context) *Agent {
 		if err != nil {
 			logrus.Fatalf("error reading id-file: %s", err)
 		}
-		m.ID = string(bytes.TrimSpace(id))
+		m.ID = string(bytes.TrimSpace(bytes.Trim(id, "\x00")))
 	}
 	return m
 }
