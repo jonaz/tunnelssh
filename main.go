@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jonaz/tunnelssh/pkg/agent"
+	"github.com/jonaz/tunnelssh/pkg/journallog"
 	"github.com/jonaz/tunnelssh/pkg/master"
 	"github.com/jonaz/tunnelssh/pkg/proxy"
 	"github.com/sirupsen/logrus"
@@ -147,6 +148,10 @@ func globalBefore(c *cli.Context) error {
 		fmt.Fprintf(os.Stderr, "using loglevel: %s\n", lvl.String())
 	}
 	logrus.SetLevel(lvl)
+
+	// Under systemd, log to journald natively so errors keep their priority
+	// instead of all being stored at info.
+	journallog.Install()
 	return nil
 }
 
