@@ -102,14 +102,26 @@ func app() *cli.App {
 		{
 			Name:  "master",
 			Usage: "starts the master that syncs from git and decodes secrets.",
+			// An empty key signs and accepts JWTs that anyone can make.
+			// Not Required: that takes TUNNELSSH_TOKEN= or --token "" as set.
+			Before: func(c *cli.Context) error {
+				if c.String("token") == "" {
+					return fmt.Errorf("master needs --token or TUNNELSSH_TOKEN")
+				}
+				return nil
+			},
 			Action: func(c *cli.Context) error {
 				master := master.NewMasterFromContext(c)
 				return master.Run(c.Context)
 			},
 			Flags: []cli.Flag{
+				// From the environment too, so a unit can keep it in a
+				// secret EnvironmentFile: an argument is readable by every
+				// local user in the process list. Before refuses an empty one.
 				&cli.StringFlag{
-					Name:  "token",
-					Usage: "used to sign the jwt's",
+					Name:    "token",
+					Usage:   "used to sign the jwt's",
+					EnvVars: []string{"TUNNELSSH_TOKEN"},
 				},
 				&cli.StringFlag{
 					Name:  "port",
