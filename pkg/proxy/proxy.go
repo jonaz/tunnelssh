@@ -21,6 +21,11 @@ type Proxy struct {
 	ID     string
 	Token  string
 	wg     *sync.WaitGroup
+
+	// stdin and stdout are the ends of the tunnel: os.Stdin and os.Stdout
+	// when ssh runs the proxy as its ProxyCommand.
+	stdin  io.ReadCloser
+	stdout io.WriteCloser
 }
 
 func NewProxyFromContext(c *cli.Context) *Proxy {
@@ -29,6 +34,8 @@ func NewProxyFromContext(c *cli.Context) *Proxy {
 		ID:     c.String("id"),
 		Token:  c.String("token"),
 		wg:     &sync.WaitGroup{},
+		stdin:  os.Stdin,
+		stdout: os.Stdout,
 	}
 	return m
 }
@@ -69,8 +76,8 @@ func (p *Proxy) Run(pCtx context.Context) error {
 			src.Close()
 		})
 	}
-	go cp(conn, os.Stdin)
-	cp(os.Stdout, conn)
+	go cp(conn, p.stdin)
+	cp(p.stdout, conn)
 
 	return nil
 

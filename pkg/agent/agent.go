@@ -44,6 +44,9 @@ func NewAgentFromContext(c *cli.Context) *Agent {
 	return m
 }
 
+// retryDelay is how long Run waits before reconnecting to the master.
+var retryDelay = 5 * time.Second
+
 func (a *Agent) Run(pCtx context.Context) error {
 	for {
 		err := a.run(pCtx)
@@ -53,7 +56,11 @@ func (a *Agent) Run(pCtx context.Context) error {
 		if pCtx.Err() != nil {
 			return pCtx.Err()
 		}
-		time.Sleep(time.Second * 5)
+		select {
+		case <-pCtx.Done():
+			return pCtx.Err()
+		case <-time.After(retryDelay):
+		}
 	}
 }
 

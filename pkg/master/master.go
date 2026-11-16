@@ -3,6 +3,7 @@ package master
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -81,9 +82,27 @@ func (s *agentSessions) List() map[string]agentSession {
 }
 
 func (a *Master) Run(pCtx context.Context) error {
+	server := &http.Server{Addr: ":" + a.Port, Handler: a.handler(pCtx)}
+	go func() {
+		err := server.ListenAndServe()
+		// Shutdown makes ListenAndServe return ErrServerClosed; that is a
+		// clean stop, not a reason to exit 1.
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logrus.Fatal(err)
+		}
+	}()
+	logrus.Info("started webserver")
+	<-pCtx.Done()
+	ctxShutDown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return server.Shutdown(ctxShutDown)
+}
 
+// handler returns the master's routes. Agent sessions live as long as pCtx.
+func (a *Master) handler(pCtx context.Context) http.Handler {
+	mux := http.NewServeMux()
 	sessions := NewAgentSessions()
-	http.HandleFunc("/connect/websocket-v1", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/connect/websocket-v1", func(w http.ResponseWriter, r *http.Request) {
 		_, err := a.jwt.Validate(r)
 		if err != nil {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -140,7 +159,7 @@ func (a *Master) Run(pCtx context.Context) error {
 
 	})
 
-	http.HandleFunc("/agent/websocket-v1", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/agent/websocket-v1", func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("id")
 		if sessions.Get(id) != nil {
 			logrus.Errorf("session %s already exists", id)
@@ -180,22 +199,10 @@ func (a *Master) Run(pCtx context.Context) error {
 		<-session.CloseChan()
 	})
 
-	http.HandleFunc("/sessions-v1", a.listSessions(sessions))
+	mux.HandleFunc("/sessions-v1", a.listSessions(sessions))
 
-	http.HandleFunc("/token-v1", a.createAdminToken)
-
-	server := &http.Server{Addr: ":" + a.Port}
-	go func() {
-		err := server.ListenAndServe()
-		if err != nil {
-			logrus.Fatal(err)
-		}
-	}()
-	logrus.Info("started webserver")
-	<-pCtx.Done()
-	ctxShutDown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	return server.Shutdown(ctxShutDown)
+	mux.HandleFunc("/token-v1", a.createAdminToken)
+	return mux
 }
 
 func (a *Master) listSessions(sessions *agentSessions) func(w http.ResponseWriter, r *http.Request) {
