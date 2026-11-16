@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/hashicorp/yamux"
+	"github.com/jonaz/tunnelssh/pkg/wsdial"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli/v2"
 	"nhooyr.io/websocket"
@@ -36,9 +38,7 @@ func (p *Proxy) Run(pCtx context.Context) error {
 	defer cancel()
 
 	u := fmt.Sprintf("%s/connect/websocket-v1?id=%s", p.Master, p.ID)
-	wsClient, _, err := websocket.Dial(ctx, u, &websocket.DialOptions{
-		HTTPHeader: map[string][]string{"Authorization": {p.Token}},
-	})
+	wsClient, _, err := wsdial.Dial(ctx, u, http.Header{"Authorization": {p.Token}})
 	if err != nil {
 		return err
 	}

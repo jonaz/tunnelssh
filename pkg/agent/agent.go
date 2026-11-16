@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/yamux"
+	"github.com/jonaz/tunnelssh/pkg/wsdial"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli/v2"
 	"nhooyr.io/websocket"
@@ -62,10 +63,8 @@ func (a *Agent) run(pCtx context.Context) error {
 
 	u := fmt.Sprintf("%s/agent/websocket-v1?id=%s", a.Master, a.ID)
 	logrus.Debugf("connecting to websocket: %s", u)
-	wsClient, _, err := websocket.Dial(ctx, u, &websocket.DialOptions{
-		HTTPHeader: http.Header{
-			"X-IPS": {strings.Join(getLocalIps(), ",")},
-		},
+	wsClient, _, err := wsdial.Dial(ctx, u, http.Header{
+		"X-IPS": {strings.Join(getLocalIps(), ",")},
 	})
 	if err != nil {
 		return err
