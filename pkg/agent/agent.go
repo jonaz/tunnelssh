@@ -12,10 +12,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/hashicorp/yamux"
+	"github.com/jonaz/tunnelssh/pkg/wsdial"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli/v2"
-	"nhooyr.io/websocket"
 )
 
 type Agent struct {
@@ -43,6 +44,9 @@ func NewAgentFromContext(c *cli.Context) *Agent {
 	return m
 }
 
+// retryDelay is how long Run waits before reconnecting to the master.
+var retryDelay = 5 * time.Second
+
 func (a *Agent) Run(pCtx context.Context) error {
 	for {
 		err := a.run(pCtx)
@@ -52,7 +56,11 @@ func (a *Agent) Run(pCtx context.Context) error {
 		if pCtx.Err() != nil {
 			return pCtx.Err()
 		}
-		time.Sleep(time.Second * 5)
+		select {
+		case <-pCtx.Done():
+			return pCtx.Err()
+		case <-time.After(retryDelay):
+		}
 	}
 }
 
@@ -62,10 +70,8 @@ func (a *Agent) run(pCtx context.Context) error {
 
 	u := fmt.Sprintf("%s/agent/websocket-v1?id=%s", a.Master, a.ID)
 	logrus.Debugf("connecting to websocket: %s", u)
-	wsClient, _, err := websocket.Dial(ctx, u, &websocket.DialOptions{
-		HTTPHeader: http.Header{
-			"X-IPS": {strings.Join(getLocalIps(), ",")},
-		},
+	wsClient, _, err := wsdial.Dial(ctx, u, http.Header{
+		"X-IPS": {strings.Join(getLocalIps(), ",")},
 	})
 	if err != nil {
 		return err

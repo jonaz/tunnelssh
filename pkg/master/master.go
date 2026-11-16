@@ -3,6 +3,7 @@ package master
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -10,11 +11,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/hashicorp/yamux"
 	"github.com/jonaz/tunnelssh/pkg/jwt"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli/v2"
-	"nhooyr.io/websocket"
 )
 
 type Master struct {
@@ -51,20 +52,33 @@ func NewAgentSessions() *agentSessions {
 
 }
 
-func (s *agentSessions) Set(id string, sess *yamux.Session, ip string, internalIPs []string) {
+// Add registers sess for id unless id is already taken, and reports
+// whether it did. Checking and registering under one lock is what keeps two
+// agents with the same id from both being registered.
+func (s *agentSessions) Add(id string, sess *yamux.Session, ip string, internalIPs []string) bool {
 	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	if _, ok := s.sessions[id]; ok {
+		return false
+	}
 	s.sessions[id] = &agentSession{
 		yamux:      sess,
 		ExternalIP: ip,
 		InteralIPs: internalIPs,
 	}
-	s.mutex.Unlock()
+	return true
 }
-func (s *agentSessions) Delete(id string) {
+
+// Delete removes id if it is still registered to sess, so a session can
+// never remove another's entry.
+func (s *agentSessions) Delete(id string, sess *yamux.Session) {
 	s.mutex.Lock()
-	delete(s.sessions, id)
-	s.mutex.Unlock()
+	defer s.mutex.Unlock()
+	if cur, ok := s.sessions[id]; ok && cur.yamux == sess {
+		delete(s.sessions, id)
+	}
 }
+
 func (s *agentSessions) Get(id string) *agentSession {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
@@ -81,9 +95,27 @@ func (s *agentSessions) List() map[string]agentSession {
 }
 
 func (a *Master) Run(pCtx context.Context) error {
+	server := &http.Server{Addr: ":" + a.Port, Handler: a.handler(pCtx)}
+	go func() {
+		err := server.ListenAndServe()
+		// Shutdown makes ListenAndServe return ErrServerClosed; that is a
+		// clean stop, not a reason to exit 1.
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logrus.Fatal(err)
+		}
+	}()
+	logrus.Info("started webserver")
+	<-pCtx.Done()
+	ctxShutDown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return server.Shutdown(ctxShutDown)
+}
 
+// handler returns the master's routes. Agent sessions live as long as pCtx.
+func (a *Master) handler(pCtx context.Context) http.Handler {
+	mux := http.NewServeMux()
 	sessions := NewAgentSessions()
-	http.HandleFunc("/connect/websocket-v1", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/connect/websocket-v1", func(w http.ResponseWriter, r *http.Request) {
 		_, err := a.jwt.Validate(r)
 		if err != nil {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -140,7 +172,7 @@ func (a *Master) Run(pCtx context.Context) error {
 
 	})
 
-	http.HandleFunc("/agent/websocket-v1", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/agent/websocket-v1", func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("id")
 		if sessions.Get(id) != nil {
 			logrus.Errorf("session %s already exists", id)
@@ -175,27 +207,21 @@ func (a *Master) Run(pCtx context.Context) error {
 				ipAddress = ips[0]
 			}
 		}
-		sessions.Set(id, session, ipAddress, strings.Split(r.Header.Get("x-ips"), ","))
-		defer sessions.Delete(id)
+		// The check before Accept gives the usual duplicate a 409, but
+		// another agent with this id may have connected since. Too late
+		// for a status code: close, and the agent's retry gets the 409.
+		if !sessions.Add(id, session, ipAddress, strings.Split(r.Header.Get("x-ips"), ",")) {
+			logrus.Errorf("session %s already exists", id)
+			return
+		}
+		defer sessions.Delete(id, session)
 		<-session.CloseChan()
 	})
 
-	http.HandleFunc("/sessions-v1", a.listSessions(sessions))
+	mux.HandleFunc("/sessions-v1", a.listSessions(sessions))
 
-	http.HandleFunc("/token-v1", a.createAdminToken)
-
-	server := &http.Server{Addr: ":" + a.Port}
-	go func() {
-		err := server.ListenAndServe()
-		if err != nil {
-			logrus.Fatal(err)
-		}
-	}()
-	logrus.Info("started webserver")
-	<-pCtx.Done()
-	ctxShutDown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	return server.Shutdown(ctxShutDown)
+	mux.HandleFunc("/token-v1", a.createAdminToken)
+	return mux
 }
 
 func (a *Master) listSessions(sessions *agentSessions) func(w http.ResponseWriter, r *http.Request) {
