@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -339,15 +340,27 @@ func TestAgentSessions(t *testing.T) {
 	if s.Get("a") != nil {
 		t.Fatal("empty sessions returned a session")
 	}
-	s.Set("a", nil, "192.0.2.1", []string{"10.0.0.1/24"})
-	if got := s.Get("a"); got == nil || got.ExternalIP != "192.0.2.1" {
-		t.Fatalf("Get = %+v", got)
+	first, second := &yamux.Session{}, &yamux.Session{}
+	if !s.Add("a", first, "192.0.2.1", []string{"10.0.0.1/24"}) {
+		t.Fatal("Add to an empty id refused")
+	}
+	if s.Add("a", second, "192.0.2.2", nil) {
+		t.Fatal("Add to a taken id accepted")
+	}
+	if got := s.Get("a"); got == nil || got.yamux != first || got.ExternalIP != "192.0.2.1" {
+		t.Fatalf("Get = %+v, want the first session", got)
 	}
 	list := s.List()
 	if len(list) != 1 || list["a"].InteralIPs[0] != "10.0.0.1/24" {
 		t.Fatalf("List = %+v", list)
 	}
-	s.Delete("a")
+
+	// Only the session holding the id can free it.
+	s.Delete("a", second)
+	if s.Get("a") == nil {
+		t.Fatal("Delete with another session removed the entry")
+	}
+	s.Delete("a", first)
 	if s.Get("a") != nil || len(s.List()) != 0 {
 		t.Fatal("session still there after Delete")
 	}
@@ -375,4 +388,109 @@ func TestRunStopsCleanly(t *testing.T) {
 	// Give the listener goroutine time to see ErrServerClosed; a Fatal there
 	// would end the test binary.
 	time.Sleep(50 * time.Millisecond)
+}
+
+// rawAgent is an agent that echoes every stream the master opens.
+type rawAgent struct {
+	sess *yamux.Session
+}
+
+func dialRawAgent(tm *testMaster, id string) (*rawAgent, error) {
+	ctx, cancel := context.WithTimeout(tm.ctx, 5*time.Second)
+	defer cancel()
+	ws, _, err := wsdial.Dial(ctx, tm.ws+"/agent/websocket-v1?id="+id, nil)
+	if err != nil {
+		return nil, err
+	}
+	sess, err := yamux.Client(websocket.NetConn(tm.ctx, ws, websocket.MessageBinary), nil)
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		for {
+			s, err := sess.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer s.Close()
+				_, _ = io.Copy(s, s)
+			}()
+		}
+	}()
+	return &rawAgent{sess: sess}, nil
+}
+
+func (a *rawAgent) open() bool {
+	select {
+	case <-a.sess.CloseChan():
+		return false
+	default:
+		return true
+	}
+}
+
+// Agents racing with the same id: exactly one is kept and stays reachable,
+// the rest are refused or disconnected, and the losers going away does not
+// drop the winner.
+func TestDuplicateAgentIDRace(t *testing.T) {
+	tm := newTestMaster(t)
+
+	const n = 20
+	agents := make(chan *rawAgent, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if a, err := dialRawAgent(tm, "dup"); err == nil {
+				agents <- a
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(agents)
+	var connected []*rawAgent
+	for a := range agents {
+		connected = append(connected, a)
+		t.Cleanup(func() { a.sess.Close() })
+	}
+
+	// The master closes every upgraded agent that lost the race.
+	var alive []*rawAgent
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		alive = alive[:0]
+		for _, a := range connected {
+			if a.open() {
+				alive = append(alive, a)
+			}
+		}
+		if len(alive) <= 1 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(alive) != 1 {
+		t.Fatalf("%d of %d agents with the same id still connected, want 1", len(alive), len(connected))
+	}
+
+	// The winner is the one the master tunnels to.
+	tm.waitFor("dup", func(l map[string]listedSession) bool { _, ok := l["dup"]; return ok })
+	c, err := tm.connect("dup", tm.token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTrip(t, c, "to the winner")
+	c.Close()
+	if !alive[0].open() {
+		t.Fatal("winner was disconnected")
+	}
+
+	// Once the winner leaves, the id is free again.
+	alive[0].sess.Close()
+	tm.waitFor("dup to go away", func(l map[string]listedSession) bool { _, ok := l["dup"]; return !ok })
 }
