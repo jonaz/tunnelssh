@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 // newCountingServer returns a server and a counter of the TCP connections it

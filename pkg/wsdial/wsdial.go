@@ -5,7 +5,7 @@ import (
 	"context"
 	"net/http"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 // httpClient has keep-alives turned off. When a handshake fails with a short

@@ -12,11 +12,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/hashicorp/yamux"
 	"github.com/jonaz/tunnelssh/pkg/wsdial"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli/v2"
-	"nhooyr.io/websocket"
 )
 
 type Agent struct {

@@ -10,11 +10,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/hashicorp/yamux"
 	"github.com/jonaz/tunnelssh/pkg/jwt"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli/v2"
-	"nhooyr.io/websocket"
 )
 
 type Master struct {
