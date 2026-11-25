@@ -26,8 +26,8 @@ type listedSession struct {
 }
 
 type testMaster struct {
-	t     *testing.T
-	ctx   context.Context
+	t       *testing.T
+	ctx     context.Context
 	srv     *httptest.Server
 	metrics *httptest.Server
 	ws      string // srv.URL with a ws:// scheme

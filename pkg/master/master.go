@@ -88,6 +88,7 @@ func (s *agentSessions) Get(id string) *agentSession {
 	defer s.mutex.RUnlock()
 	return s.sessions[id]
 }
+
 // IDs returns the ids that have a session.
 func (s *agentSessions) IDs() []string {
 	s.mutex.RLock()
@@ -203,6 +204,12 @@ func (a *Master) handlers(pCtx context.Context) (public, metricsHandler http.Han
 
 	mux.HandleFunc("/agent/websocket-v1", func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("id")
+		if !validID(id) {
+			logrus.Errorf("refused agent with invalid id %q", id)
+			metrics.rejected.WithLabelValues(rejectInvalidID).Inc()
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 		if sessions.Get(id) != nil {
 			logrus.Errorf("session %s already exists", id)
 			metrics.rejected.WithLabelValues(rejectDuplicateID).Inc()
@@ -257,6 +264,28 @@ func (a *Master) handlers(pCtx context.Context) (public, metricsHandler http.Han
 
 	mux.HandleFunc("/token-v1", a.createAdminToken)
 	return mux, metrics.handler()
+}
+
+// maxIDLength is the longest agent id the master accepts.
+const maxIDLength = 64
+
+// validID reports whether id is one the master registers: 1 to maxIDLength
+// characters of A-Z, a-z, 0-9, '.', '_' and '-'. Agents connect without
+// authentication, and the id becomes a label of tunnelssh_agent_connected
+// and a key of /sessions-v1, so an empty id, or one with quotes, newlines
+// or kilobytes in it, is refused before the upgrade.
+func validID(id string) bool {
+	if id == "" || len(id) > maxIDLength {
+		return false
+	}
+	for _, c := range id {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '.', c == '_', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func (a *Master) listSessions(sessions *agentSessions) func(w http.ResponseWriter, r *http.Request) {

@@ -16,6 +16,8 @@ const (
 	rejectDuplicateID = "duplicate_id"
 	// The websocket upgrade or the yamux session failed.
 	rejectHandshake = "handshake"
+	// The id is empty, too long or has characters validID refuses.
+	rejectInvalidID = "invalid_id"
 )
 
 // metrics are the master's Prometheus metrics. They have a registry of their
@@ -45,7 +47,7 @@ func newMetrics(sessions *agentSessions) *metrics {
 	}
 	// Every reason from the start, so a rate() over them has a zero to
 	// start from instead of a series that appears on the first refusal.
-	for _, r := range []string{rejectDuplicateID, rejectHandshake} {
+	for _, r := range []string{rejectDuplicateID, rejectHandshake, rejectInvalidID} {
 		m.rejected.WithLabelValues(r)
 	}
 	m.registry.MustRegister(

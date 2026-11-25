@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -160,5 +161,31 @@ func TestRunServesMetricsApart(t *testing.T) {
 	}
 	if code, _ := get("http://127.0.0.1:" + port + "/metrics"); code != http.StatusNotFound {
 		t.Fatalf("port /metrics: %d, want 404", code)
+	}
+}
+
+func TestInvalidAgentIDRefused(t *testing.T) {
+	tm := newTestMaster(t)
+	for i, id := range []string{"", strings.Repeat("a", maxIDLength+1), "a b", `a"b`, "a\nb", "å"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, resp, err := wsdial.Dial(ctx, tm.ws+"/agent/websocket-v1?id="+url.QueryEscape(id), nil)
+		cancel()
+		if err == nil {
+			t.Fatalf("agent with id %q accepted", id)
+		}
+		if resp == nil || resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("id %q: resp = %v, want 400", id, resp)
+		}
+		tm.waitMetric(`tunnelssh_agent_rejected_total{reason="invalid_id"}`, float64(i+1))
+	}
+	tm.waitMetric(sessionsSeries, 0)
+	tm.waitMetric(connectsSeries, 0)
+}
+
+func TestValidID(t *testing.T) {
+	for _, id := range []string{"a", "10000000c5e632d2", "host-1.lan_2", strings.Repeat("a", maxIDLength)} {
+		if !validID(id) {
+			t.Errorf("validID(%q) = false, want true", id)
+		}
 	}
 }
