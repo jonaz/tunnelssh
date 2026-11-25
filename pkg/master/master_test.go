@@ -28,9 +28,10 @@ type listedSession struct {
 type testMaster struct {
 	t     *testing.T
 	ctx   context.Context
-	srv   *httptest.Server
-	ws    string // srv.URL with a ws:// scheme
-	token string
+	srv     *httptest.Server
+	metrics *httptest.Server
+	ws      string // srv.URL with a ws:// scheme
+	token   string
 }
 
 func newTestMaster(t *testing.T) *testMaster {
@@ -39,10 +40,13 @@ func newTestMaster(t *testing.T) *testMaster {
 	t.Cleanup(cancel)
 
 	m := &Master{jwt: jwt.New("secret")}
-	srv := httptest.NewServer(m.handler(ctx))
+	public, metrics := m.handlers(ctx)
+	srv := httptest.NewServer(public)
 	t.Cleanup(srv.Close)
+	ms := httptest.NewServer(metrics)
+	t.Cleanup(ms.Close)
 
-	tm := &testMaster{t: t, ctx: ctx, srv: srv, ws: "ws" + strings.TrimPrefix(srv.URL, "http")}
+	tm := &testMaster{t: t, ctx: ctx, srv: srv, metrics: ms, ws: "ws" + strings.TrimPrefix(srv.URL, "http")}
 	tm.token = tm.adminToken()
 	return tm
 }

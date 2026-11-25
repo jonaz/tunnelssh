@@ -128,6 +128,10 @@ func app() *cli.App {
 					Value: "8080",
 					Usage: "webserver port to listen to",
 				},
+				&cli.StringFlag{
+					Name:  "metrics-addr",
+					Usage: "address to serve Prometheus /metrics on, such as :9182; never on --port, so it is not exposed with the rest. Empty serves none",
+				},
 			},
 		},
 		{

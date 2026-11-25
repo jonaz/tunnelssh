@@ -20,16 +20,20 @@ import (
 
 type Master struct {
 	Port string
-	jwt  *jwt.JWTHandler
+	// MetricsAddr is where /metrics is served, apart from Port so that it
+	// is never reachable through whatever exposes Port. Empty serves none.
+	MetricsAddr string
+	jwt         *jwt.JWTHandler
 
 	wg *sync.WaitGroup
 }
 
 func NewMasterFromContext(c *cli.Context) *Master {
 	m := &Master{
-		Port: c.String("port"),
-		jwt:  jwt.New(c.String("token")),
-		wg:   &sync.WaitGroup{},
+		Port:        c.String("port"),
+		MetricsAddr: c.String("metrics-addr"),
+		jwt:         jwt.New(c.String("token")),
+		wg:          &sync.WaitGroup{},
 	}
 	return m
 }
@@ -84,6 +88,17 @@ func (s *agentSessions) Get(id string) *agentSession {
 	defer s.mutex.RUnlock()
 	return s.sessions[id]
 }
+// IDs returns the ids that have a session.
+func (s *agentSessions) IDs() []string {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	ids := make([]string, 0, len(s.sessions))
+	for id := range s.sessions {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 func (s *agentSessions) List() map[string]agentSession {
 	ret := make(map[string]agentSession)
 	s.mutex.RLock()
@@ -95,26 +110,40 @@ func (s *agentSessions) List() map[string]agentSession {
 }
 
 func (a *Master) Run(pCtx context.Context) error {
-	server := &http.Server{Addr: ":" + a.Port, Handler: a.handler(pCtx)}
-	go func() {
-		err := server.ListenAndServe()
-		// Shutdown makes ListenAndServe return ErrServerClosed; that is a
-		// clean stop, not a reason to exit 1.
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logrus.Fatal(err)
-		}
-	}()
-	logrus.Info("started webserver")
+	public, metrics := a.handlers(pCtx)
+	servers := []*http.Server{{Addr: ":" + a.Port, Handler: public}}
+	if a.MetricsAddr != "" {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", metrics)
+		servers = append(servers, &http.Server{Addr: a.MetricsAddr, Handler: mux})
+	}
+	for _, server := range servers {
+		go func() {
+			err := server.ListenAndServe()
+			// Shutdown makes ListenAndServe return ErrServerClosed; that is a
+			// clean stop, not a reason to exit 1.
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logrus.Fatal(err)
+			}
+		}()
+		logrus.Infof("started webserver on %s", server.Addr)
+	}
 	<-pCtx.Done()
 	ctxShutDown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return server.Shutdown(ctxShutDown)
+	var errs []error
+	for _, server := range servers {
+		errs = append(errs, server.Shutdown(ctxShutDown))
+	}
+	return errors.Join(errs...)
 }
 
-// handler returns the master's routes. Agent sessions live as long as pCtx.
-func (a *Master) handler(pCtx context.Context) http.Handler {
+// handlers returns the master's public routes and its /metrics handler,
+// which share the agent sessions. The sessions live as long as pCtx.
+func (a *Master) handlers(pCtx context.Context) (public, metricsHandler http.Handler) {
 	mux := http.NewServeMux()
 	sessions := NewAgentSessions()
+	metrics := newMetrics(sessions)
 	mux.HandleFunc("/connect/websocket-v1", func(w http.ResponseWriter, r *http.Request) {
 		_, err := a.jwt.Validate(r)
 		if err != nil {
@@ -176,6 +205,7 @@ func (a *Master) handler(pCtx context.Context) http.Handler {
 		id := r.URL.Query().Get("id")
 		if sessions.Get(id) != nil {
 			logrus.Errorf("session %s already exists", id)
+			metrics.rejected.WithLabelValues(rejectDuplicateID).Inc()
 			w.WriteHeader(http.StatusConflict)
 			return
 		}
@@ -183,6 +213,7 @@ func (a *Master) handler(pCtx context.Context) http.Handler {
 		c, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			logrus.Error(err)
+			metrics.rejected.WithLabelValues(rejectHandshake).Inc()
 			return
 		}
 		logrus.Debugf("accepted connection from %s", id)
@@ -192,6 +223,7 @@ func (a *Master) handler(pCtx context.Context) http.Handler {
 		session, err := yamux.Server(conn, nil)
 		if err != nil {
 			logrus.Error(err)
+			metrics.rejected.WithLabelValues(rejectHandshake).Inc()
 			return
 		}
 		defer session.Close()
@@ -212,8 +244,11 @@ func (a *Master) handler(pCtx context.Context) http.Handler {
 		// for a status code: close, and the agent's retry gets the 409.
 		if !sessions.Add(id, session, ipAddress, strings.Split(r.Header.Get("x-ips"), ",")) {
 			logrus.Errorf("session %s already exists", id)
+			metrics.rejected.WithLabelValues(rejectDuplicateID).Inc()
 			return
 		}
+		metrics.connects.Inc()
+		defer metrics.disconnects.Inc()
 		defer sessions.Delete(id, session)
 		<-session.CloseChan()
 	})
@@ -221,7 +256,7 @@ func (a *Master) handler(pCtx context.Context) http.Handler {
 	mux.HandleFunc("/sessions-v1", a.listSessions(sessions))
 
 	mux.HandleFunc("/token-v1", a.createAdminToken)
-	return mux
+	return mux, metrics.handler()
 }
 
 func (a *Master) listSessions(sessions *agentSessions) func(w http.ResponseWriter, r *http.Request) {
